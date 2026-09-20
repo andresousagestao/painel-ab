@@ -1,7 +1,0 @@
-{
-  "functions": {
-    "api/refresh.py": {
-      "maxDuration": 60
-    }
-  }
-}
