@@ -319,6 +319,7 @@ input[type="text"]:focus, input[type="number"]:focus, select:focus{ outline:2px 
       <button id="btn-view-home" class="active">🏠 Início</button>
       <button id="btn-view-vendor">Por vendedor</button>
       <button id="btn-view-team">Equipa</button>
+      <button id="btn-view-storedetail">🏬 Por loja</button>
       <button id="btn-view-goals">🎯 Objetivos das lojas</button>
       <button id="btn-view-commissions">💶 Comissões</button>
       <button id="btn-view-admin">🔒 Administrador</button>
@@ -641,6 +642,7 @@ function setActiveViewBtn(){
   document.getElementById('btn-view-home').classList.toggle('active', currentView==='home');
   document.getElementById('btn-view-vendor').classList.toggle('active', currentView==='vendor');
   document.getElementById('btn-view-team').classList.toggle('active', currentView==='team');
+  document.getElementById('btn-view-storedetail').classList.toggle('active', currentView==='storedetail');
   document.getElementById('btn-view-goals').classList.toggle('active', currentView==='goals');
   document.getElementById('btn-view-commissions').classList.toggle('active', currentView==='commissions');
   document.getElementById('btn-view-admin').classList.toggle('active', currentView==='admin');
@@ -1209,8 +1211,16 @@ function storeMonthlyPct(gid){
   currentPeriod = 'MTD'; // storeTarget reads currentPeriod for the manual-override lookup
   const t = storeTarget(gid, acc);
   currentPeriod = savedPeriod;
-  if(t.value===null || !t.value || acc.net_sales===null||acc.net_sales===undefined) return {pct:null, source:t.source};
-  return {pct: acc.net_sales/t.value, source:t.source};
+  if(t.value===null || !t.value || acc.net_sales===null||acc.net_sales===undefined) return {pct:null, source:t.source, target:t.value};
+  return {pct: acc.net_sales/t.value, source:t.source, target:t.value};
+}
+function storeMonthlyPctProjected(gid, target){
+  const store = DATA.stores[gid];
+  if(!store || !target) return {pct:null, projSales:null};
+  const acc = (store.periods.MTD||{}).acc || {};
+  const projSales = projectValue('MTD', acc.net_sales);
+  if(projSales===null) return {pct:null, projSales:null};
+  return {pct: projSales/target, projSales};
 }
 function computeCommission(empId, emp){
   const role = ROLES[empId] || null;
@@ -1229,7 +1239,24 @@ function computeCommission(empId, emp){
     const pivotPct = PIVOT_PCT_OVERRIDE[gid]!==undefined ? PIVOT_PCT_OVERRIDE[gid] : PIVOT_PCT_DEFAULT;
     premio = base!==null ? (role==='OPTOMETRISTA PIVOT' ? base*pivotPct : base) : 0;
   }
-  return {role, sales, storePct, commPct, comissao, premio, total:comissao+premio, incomplete:false, targetSource:sp.source};
+
+  // Projeção fim do mês: projeta as vendas do vendedor E da loja ao mesmo
+  // ritmo diário, recalcula o escalão de comissão/prémio com base nisso.
+  const spProj = storeMonthlyPctProjected(gid, sp.target);
+  const projSales = projectValue('MTD', sales);
+  const projCommPct = tieredLookup(COMMISSION_TABLE, spProj.pct);
+  const projComissao = (projCommPct!==null && projSales) ? projCommPct*projSales : 0;
+  let projPremio = 0;
+  if(role==='OPTOMETRISTA' || role==='OPTOMETRISTA PIVOT'){
+    const bracket = STORE_REVENUE_BRACKET[gid];
+    const base = bracket ? tieredLookup(PREMIO_TABLES[bracket], spProj.pct) : null;
+    const pivotPct = PIVOT_PCT_OVERRIDE[gid]!==undefined ? PIVOT_PCT_OVERRIDE[gid] : PIVOT_PCT_DEFAULT;
+    projPremio = base!==null ? (role==='OPTOMETRISTA PIVOT' ? base*pivotPct : base) : 0;
+  }
+  const projTotal = projComissao + projPremio;
+
+  return {role, sales, storePct, commPct, comissao, premio, total:comissao+premio, incomplete:false, targetSource:sp.source,
+          projSales, projStorePct:spProj.pct, projCommPct, projTotal};
 }
 
 function renderCommissionsView(){
@@ -1251,22 +1278,23 @@ function renderCommissionsView(){
     html += `<p class="empty-note" style="margin-bottom:18px;">${missingRole.length} colaborador(es) ainda sem função definida — não entram no cálculo até indicares a função em <b>🔒 Administrador → Nomes e Funções</b>.</p>`;
   }
 
-  let grandComissao=0, grandPremio=0;
+  let grandComissao=0, grandPremio=0, grandProj=0;
   let storesHtml = '';
 
   Object.entries(byStore).sort((a,b)=>a[1].name.localeCompare(b[1].name)).forEach(([gid,grp])=>{
     const sp = storeMonthlyPct(gid);
+    const spProj = storeMonthlyPctProjected(gid, sp.target);
     const bracket = STORE_REVENUE_BRACKET[gid] || '—';
     const pivotPct = PIVOT_PCT_OVERRIDE[gid]!==undefined ? PIVOT_PCT_OVERRIDE[gid] : PIVOT_PCT_DEFAULT;
     storesHtml += `<div class="section"><h2>${grp.name}</h2>
-      <p class="empty-note" style="margin-top:-6px;">Objetivo mensal atingido: <b style="color:var(--ink)">${sp.pct!==null?fmtPct(sp.pct):'sem objetivo definido'}</b>${sp.pct===null?' (define o objetivo mensal desta loja na aba Objetivos para calcular as comissões)':''} · Escalão de faturação (ano anterior): <b style="color:var(--ink)">${bracket}</b> · Optometrista Pivot recebe <b style="color:var(--ink)">${fmtPct(pivotPct)}</b> do prémio nesta loja</p>
+      <p class="empty-note" style="margin-top:-6px;">Objetivo mensal atingido: <b style="color:var(--ink)">${sp.pct!==null?fmtPct(sp.pct):'sem objetivo definido'}</b>${sp.pct===null?' (define o objetivo mensal desta loja na aba Objetivos para calcular as comissões)':''}${spProj.pct!==null?` · Projeção fim do mês: <b style="color:var(--ink)">${fmtPct(spProj.pct)}</b>`:''} · Escalão de faturação (ano anterior): <b style="color:var(--ink)">${bracket}</b> · Optometrista Pivot recebe <b style="color:var(--ink)">${fmtPct(pivotPct)}</b> do prémio nesta loja</p>
       <div class="panel table-scroll"><table><thead><tr>
-        <th>Colaborador</th><th>Função</th><th class="num">Vendas (contab., mês)</th><th class="num">% Comissão</th><th class="num">Comissão</th><th class="num">Prémio</th><th class="num">Total</th>
+        <th>Colaborador</th><th>Função</th><th class="num">Vendas (contab., mês)</th><th class="num">% Comissão</th><th class="num">Comissão</th><th class="num">Prémio</th><th class="num">Total</th><th class="num">Total projetado (fim do mês)</th>
       </tr></thead><tbody>`;
     grp.items.sort((a,b)=>a.id.localeCompare(b.id)).forEach(e=>{
       const nm = getName(e.id) || e.id;
       const c = computeCommission(e.id, e);
-      grandComissao += c.comissao; grandPremio += c.premio;
+      grandComissao += c.comissao; grandPremio += c.premio; grandProj += (c.projTotal||0);
       storesHtml += `<tr>
         <td>${nm}</td>
         <td>${c.role ? c.role.charAt(0)+c.role.slice(1).toLowerCase() : '<span class="pill down">por definir</span>'}</td>
@@ -1275,6 +1303,7 @@ function renderCommissionsView(){
         <td class="num">${fmtEURf(c.comissao)}</td>
         <td class="num">${fmtEURf(c.premio)}</td>
         <td class="num" style="font-weight:700;">${fmtEURf(c.total)}</td>
+        <td class="num" style="font-weight:700; color:var(--brass);">${c.role ? fmtEURf(c.projTotal) : '—'}</td>
       </tr>`;
     });
     storesHtml += `</tbody></table></div></div>`;
@@ -1283,12 +1312,154 @@ function renderCommissionsView(){
   html += `<div class="goal-summary">
       <div class="card"><div class="label">Total comissões (%)</div><div class="value small">${fmtEURf(grandComissao)}</div></div>
       <div class="card"><div class="label">Total prémios (optometristas)</div><div class="value small">${fmtEURf(grandPremio)}</div></div>
-      <div class="card"><div class="label">Total geral</div><div class="value small">${fmtEURf(grandComissao+grandPremio)}</div></div>
+      <div class="card"><div class="label">Total geral (até agora)</div><div class="value small">${fmtEURf(grandComissao+grandPremio)}</div></div>
+      <div class="card"><div class="label">Total geral projetado (fim do mês)</div><div class="value small" style="color:var(--brass);">${fmtEURf(grandProj)}</div></div>
     </div>`;
   html += storesHtml;
-  html += `<div class="foot-note">Tabelas de comissão/prémio e escalões de faturação replicados do mapa de comissões Aguiar&amp;Biscaia. Diz-me se quiseres torná-los editáveis diretamente no painel.</div>`;
+  html += `<p class="empty-note" style="margin:-10px 0 16px;">A projeção assume que cada vendedor e a respetiva loja continuam a vender ao mesmo ritmo diário médio até ao fim do mês (calendário gregoriano) — é uma estimativa, recalculada com o novo escalão de comissão/prémio que resultaria desse ritmo, não uma garantia de valor a receber.</p>
+  <div class="foot-note">Tabelas de comissão/prémio e escalões de faturação replicados do mapa de comissões Aguiar&amp;Biscaia. Diz-me se quiseres torná-los editáveis diretamente no painel.</div>`;
 
   main.innerHTML = html;
+}
+
+function parseSnapshotDate(){
+  const [d,m,y] = (DATA.meta.snapshot_date || '').split('/').map(Number);
+  if(!d||!m||!y) return null;
+  return new Date(y, m-1, d);
+}
+
+function isLeapYear(y){ return (y%4===0 && y%100!==0) || y%400===0; }
+
+/* Calcula, para o período selecionado, quantos dias já passaram e quantos
+   dias tem o período no total (calendário gregoriano) — usado para projetar
+   o valor final assumindo o mesmo ritmo de vendas. Devolve null para "Dia"
+   (não há o que projetar num único dia). */
+function periodElapsedFraction(period){
+  const dt = parseSnapshotDate();
+  if(!dt || period==='LD') return null;
+  const y = dt.getFullYear(), m = dt.getMonth(); // 0-based month
+  if(period==='MTD'){
+    const totalDays = new Date(y, m+1, 0).getDate();
+    const elapsed = dt.getDate();
+    return {elapsed, total: totalDays};
+  }
+  if(period==='YTD'){
+    const totalDays = isLeapYear(y) ? 366 : 365;
+    const start = new Date(y,0,1);
+    const elapsed = Math.floor((dt-start)/86400000) + 1;
+    return {elapsed, total: totalDays};
+  }
+  if(period==='QTD'){
+    const qStartMonth = Math.floor(m/3)*3;
+    const start = new Date(y, qStartMonth, 1);
+    const end = new Date(y, qStartMonth+3, 0);
+    const totalDays = Math.floor((end-start)/86400000) + 1;
+    const elapsed = Math.floor((dt-start)/86400000) + 1;
+    return {elapsed, total: totalDays};
+  }
+  if(period==='WTD'){
+    // semana de calendário, segunda a domingo
+    const dow = (dt.getDay()+6)%7; // 0=segunda ... 6=domingo
+    const start = new Date(y, m, dt.getDate()-dow);
+    return {elapsed: dow+1, total: 7};
+  }
+  return null;
+}
+
+function projectValue(period, actual){
+  if(actual===null||actual===undefined) return null;
+  const f = periodElapsedFraction(period);
+  if(!f || !f.elapsed) return null;
+  return actual * (f.total / f.elapsed);
+}
+
+let currentStoreSel = null;
+function renderStoreDetailView(){
+  const main = document.getElementById('main');
+  const storeIds = Object.keys(DATA.stores).sort((a,b)=>DATA.stores[a].name.localeCompare(DATA.stores[b].name));
+  if(!currentStoreSel || !DATA.stores[currentStoreSel]) currentStoreSel = storeIds[0];
+  const s = DATA.stores[currentStoreSel];
+  const pd = s.periods[currentPeriod] || {};
+  const com = pd.com || {};
+  const acc = pd.acc || {};
+
+  let html = `<div class="topbar">
+    <div><h1>${s.name}</h1><div class="meta">Vista por loja · Snapshot: ${DATA.meta.snapshot_date}</div></div>
+  </div>`;
+
+  html += `<div class="period-tabs" style="margin-bottom:10px;">` + storeIds.map(gid=>
+    `<button data-store="${gid}" class="${gid===currentStoreSel?'active':''}">${DATA.stores[gid].name}</button>`
+  ).join('') + `</div>`;
+
+  html += periodTabsHtml();
+
+  const t = storeTarget(currentStoreSel, acc);
+  const target = t.value;
+  const done = acc.net_sales;
+  const pct = (target && target>0 && done!==null&&done!==undefined) ? done/target : null;
+  const remaining = (target!==null && done!==null&&done!==undefined) ? Math.max(0, target-done) : null;
+  const projAcc = projectValue(currentPeriod, acc.net_sales);
+  const projCom = projectValue(currentPeriod, com.net_sales);
+  const f = periodElapsedFraction(currentPeriod);
+
+  html += `<div class="grid-cards">
+    <div class="card">
+      <div class="label">Vendas comerciais — ${PLABELS[currentPeriod]}</div>
+      <div class="value">${fmtEUR(com.net_sales)}</div>
+      ${com.vs_py_pct!==null&&com.vs_py_pct!==undefined ? `<div class="delta ${deltaClass(com.vs_py_pct)}">${deltaArrow(com.vs_py_pct)} ${fmtPct(com.vs_py_pct)} vs ano anterior</div>` : ''}
+    </div>
+    <div class="card">
+      <div class="label">Vendas contabilísticas — ${PLABELS[currentPeriod]}</div>
+      <div class="value">${fmtEUR(acc.net_sales)}</div>
+      ${acc.vs_py_pct!==null&&acc.vs_py_pct!==undefined ? `<div class="delta ${deltaClass(acc.vs_py_pct)}">${deltaArrow(acc.vs_py_pct)} ${fmtPct(acc.vs_py_pct)} vs ano anterior</div>` : ''}
+    </div>
+    <div class="card">
+      <div class="label">Projeção (contab.) — fim ${PLABELS[currentPeriod].toLowerCase()}</div>
+      <div class="value small">${projAcc!==null ? fmtEUR(projAcc) : '—'}</div>
+      <div class="delta flat">${f ? `Dia ${f.elapsed} de ${f.total}` : 'Não aplicável ao dia'}</div>
+    </div>
+    <div class="card">
+      <div class="label">Objetivo — ${PLABELS[currentPeriod]}</div>
+      <div class="value small">${target!==null?fmtEUR(target):'—'}</div>
+      ${target!==null ? `<div class="progress"><div style="width:${Math.min(100,(pct||0)*100)}%; background:${pct>=1?'#3F6B49':'#7C3327'};"></div></div>
+      <div class="progress-label">${remaining>0 ? `Falta ${fmtEUR(remaining)} (${fmtPct(pct)} atingido)` : `Objetivo superado — ${fmtPct(pct)}`}</div>` : `<div class="progress-label">Sem objetivo definido</div>`}
+    </div>
+  </div>`;
+
+  html += `<p class="empty-note" style="margin:-8px 0 18px;">A projeção assume que a loja continua a vender ao mesmo ritmo diário médio até ao fim do período (calendário gregoriano) — é uma estimativa, não uma garantia. Vendas comerciais também projetadas: ${projCom!==null?fmtEUR(projCom):'—'}.</p>`;
+
+  html += `<div class="section">
+    <h2>Indicadores óticos (contabilístico) — ${PLABELS[currentPeriod]}</h2>
+    <div class="panel">
+      <div class="gauge-row">
+        ${donutGauge('Progressivos', acc.mf_pct, '#3F6B49')}
+        ${donutGauge('Fotocromáticos', acc.photochromic_pct, '#39587A')}
+        ${donutGauge('Filtro luz azul', acc.blue_pct, '#6E5187')}
+        ${donutGauge('2º Par', acc.second_pair_penetration_pct, '#A9651E')}
+      </div>
+    </div>
+  </div>`;
+
+  html += `<div class="section">
+    <h2>+MultiOpticas (VaaS, contabilístico) — ${PLABELS[currentPeriod]}</h2>
+    <div class="vaas-panel">
+      <div class="vaas-cards">
+        <div class="card"><div class="label">Vendas VaaS</div><div class="value small">${fmtEUR(acc.vaas)}</div></div>
+        <div class="card"><div class="label">Volume VaaS</div><div class="value small">${fmtNum(com.vaas_volume)}</div></div>
+        <div class="card"><div class="label">Insurance</div><div class="value small">${fmtEUR(acc.insurance_sales)}</div></div>
+      </div>
+    </div>
+  </div>`;
+
+  html += `<div class="foot-note">Snapshot ${DATA.meta.snapshot_date}.</div>`;
+
+  main.innerHTML = html;
+  main.querySelectorAll('.period-tabs button[data-store]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ currentStoreSel = btn.dataset.store; renderAll(); });
+  });
+  main.querySelectorAll('.period-tabs button[data-p]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ currentPeriod = btn.dataset.p; renderAll(); });
+  });
 }
 
 function renderGoalsView(){
@@ -1483,6 +1654,7 @@ function renderHomeView(){
   const tiles = [
     {icon:'👤', title:'Por vendedor', desc:'Vendas, objetivos e indicadores de cada colaborador, dia a dia.', view:'vendor'},
     {icon:'👥', title:'Equipa', desc:'Ranking de vendedores e lojas, comparação e vista de gestão.', view:'team'},
+    {icon:'🏬', title:'Por loja', desc:'Vendas, projeção até ao fim do período e KPIs de cada loja.', view:'storedetail'},
     {icon:'🎯', title:'Objetivos das lojas', desc:'Acompanhamento do objetivo de cada loja e o que falta atingir.', view:'goals'},
     {icon:'💶', title:'Comissões', desc:'Cálculo mensal de comissões e prémios por colaborador.', view:'commissions'},
     {icon:'🔒', title:'Administrador', desc:'Nomes, funções e objetivos reais das lojas — protegido por palavra-passe.', view:'admin'},
@@ -1509,6 +1681,7 @@ function renderAll(){
   if(currentView==='home') renderHomeView();
   else if(currentView==='vendor') renderVendorView();
   else if(currentView==='team') renderTeamView();
+  else if(currentView==='storedetail') renderStoreDetailView();
   else if(currentView==='goals') renderGoalsView();
   else if(currentView==='commissions') renderCommissionsView();
   else renderAdminView();
@@ -1518,6 +1691,7 @@ document.getElementById('search').addEventListener('input', renderSidebar);
 document.getElementById('btn-view-home').addEventListener('click', ()=>{ currentView='home'; setActiveViewBtn(); renderAll(); });
 document.getElementById('btn-view-vendor').addEventListener('click', ()=>{ currentView='vendor'; setActiveViewBtn(); renderAll(); });
 document.getElementById('btn-view-team').addEventListener('click', ()=>{ currentView='team'; setActiveViewBtn(); renderAll(); });
+document.getElementById('btn-view-storedetail').addEventListener('click', ()=>{ currentView='storedetail'; setActiveViewBtn(); renderAll(); });
 document.getElementById('btn-view-goals').addEventListener('click', ()=>{ currentView='goals'; setActiveViewBtn(); renderAll(); });
 document.getElementById('btn-view-commissions').addEventListener('click', ()=>{ currentView='commissions'; setActiveViewBtn(); renderAll(); });
 document.getElementById('btn-view-admin').addEventListener('click', ()=>{ currentView='admin'; setActiveViewBtn(); renderAll(); });
