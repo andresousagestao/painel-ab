@@ -841,15 +841,16 @@ function renderVendorView(){
 
   // Lojas onde o vendedor efetivamente vendeu no período selecionado (pode
   // diferir da "loja principal", derivada do próprio código do vendedor).
-  const periodStoreNames = Object.values(pd.by_store || {}).map(s=>s.store_name);
-  const todayStoreNames = Object.values((emp.periods.LD||{}).by_store || {}).map(s=>s.store_name);
+  const periodStoreNames = Object.values(pd.by_store || {}).filter(s=>s.com && s.com.net_sales>0).map(s=>s.store_name);
+  const todayStoreNames = Object.values((emp.periods.LD||{}).by_store || {}).filter(s=>s.com && s.com.net_sales>0).map(s=>s.store_name);
 
   let html = '';
   const nm = getName(currentEmp);
   html += `<div class="topbar">
     <div>
       <h1>${nm || currentEmp}</h1>
-      <div class="meta">${nm ? currentEmp+' · ' : ''}Loja principal: ${store ? store.store_name : 'desconhecida'}${periodStoreNames.length ? ` · Vendeu (${PLABELS[currentPeriod]}) em: <b style="color:var(--ink)">${periodStoreNames.join(', ')}</b>` : ''}</div>
+      <div class="meta">${nm ? currentEmp+' · ' : ''}Loja principal: ${store ? store.store_name : 'desconhecida'}</div>
+      ${periodStoreNames.length ? `<div class="meta">Vendeu (${PLABELS[currentPeriod]}) em: <b style="color:var(--ink)">${periodStoreNames.join(', ')}</b></div>` : ''}
     </div>
     <div class="store-context">
       <span>Snapshot: <b>${DATA.meta.snapshot_date}</b></span>
