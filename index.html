@@ -418,7 +418,7 @@ async function loadSnapshot(){
   // 1) Tenta sempre dados frescos, buscados e tratados na hora a partir do OneDrive/Google Drive.
   lastRefreshError = null;
   try{
-    const resp = await fetch('/api/refresh');
+    const resp = await fetch('/api/refresh', {cache: 'no-store'});
     const result = await resp.json().catch(()=>null);
     if(resp.ok && result && result.stores && Object.keys(result.stores).length){
       usingCachedFallback = false;
@@ -839,16 +839,21 @@ function renderVendorView(){
   const tgtPct = acc.vs_tgt_pct;
   const tgtWidth = tgtPct!==null&&tgtPct!==undefined ? Math.min(100, Math.max(0,(1+tgtPct)*50)) : null;
 
+  // Lojas onde o vendedor efetivamente vendeu no período selecionado (pode
+  // diferir da "loja principal", derivada do próprio código do vendedor).
+  const periodStoreNames = Object.values(pd.by_store || {}).map(s=>s.store_name);
+  const todayStoreNames = Object.values((emp.periods.LD||{}).by_store || {}).map(s=>s.store_name);
+
   let html = '';
   const nm = getName(currentEmp);
   html += `<div class="topbar">
     <div>
       <h1>${nm || currentEmp}</h1>
-      <div class="meta">${nm ? currentEmp+' · ' : ''}${store ? store.store_name+' · '+store.global_id : 'Loja desconhecida'} — vendedor(a)</div>
+      <div class="meta">${nm ? currentEmp+' · ' : ''}Loja principal: ${store ? store.store_name : 'desconhecida'}${periodStoreNames.length ? ` · Vendeu (${PLABELS[currentPeriod]}) em: <b style="color:var(--ink)">${periodStoreNames.join(', ')}</b>` : ''}</div>
     </div>
     <div class="store-context">
       <span>Snapshot: <b>${DATA.meta.snapshot_date}</b></span>
-      <span>Loja hoje: <b>${store ? fmtEUR((DATA.stores[store.global_id].periods.LD.acc||{}).net_sales) : '—'}</b></span>
+      <span>Hoje em: <b>${todayStoreNames.length ? todayStoreNames.join(', ') : '—'}</b></span>
     </div>
   </div>`;
 
