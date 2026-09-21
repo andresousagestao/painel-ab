@@ -27,8 +27,8 @@ import requests
 from datetime import datetime
 from openpyxl import load_workbook
 
-EMP_RE = re.compile(r'^st[mo]\d{3}a\d+$', re.I)
-ID_STORE_RE = re.compile(r'^st([mo])(\d{3})a\d+$', re.I)
+EMP_RE = re.compile(r'^st[mo]\d{3}[a-z]\d*$', re.I)
+ID_STORE_RE = re.compile(r'^st([mo])(\d{3})[a-z]\d*$', re.I)
 PERIODS = ['LD', 'WTD', 'MTD', 'QTD', 'YTD']
 
 ADDITIVE = {'net_sales', 'sales_opt', 'sales_sun', 'sales_cl', 'sales_oth', 'cp_volume',
@@ -370,5 +370,6 @@ class handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
         self.end_headers()
         self.wfile.write(body)
