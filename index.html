@@ -1222,32 +1222,32 @@ function storeMonthlyPctProjected(gid, target){
   if(projSales===null) return {pct:null, projSales:null};
   return {pct: projSales/target, projSales};
 }
-function computeCommission(empId, emp){
+function computeCommissionAtStore(empId, emp, gid, salesAcc, isHome){
   const role = ROLES[empId] || null;
-  const gid = emp.store ? emp.store.global_id : null;
-  if(!role || !gid) return {role, sales:null, pct:null, comissao:0, premio:0, total:0, incomplete:true};
-  const mtd = emp.periods.MTD || {};
-  const sales = (mtd.acc && mtd.acc.net_sales!==undefined) ? mtd.acc.net_sales : 0;
+  if(!role) return {role, sales:salesAcc, comissao:0, premio:0, total:0, incomplete:true};
   const sp = storeMonthlyPct(gid);
   const storePct = sp.pct;
   const commPct = tieredLookup(COMMISSION_TABLE, storePct);
-  const comissao = (commPct!==null && sales) ? commPct*sales : 0;
+  const comissao = (commPct!==null && salesAcc) ? commPct*salesAcc : 0;
   let premio = 0;
-  if(role==='OPTOMETRISTA' || role==='OPTOMETRISTA PIVOT'){
+  // O prémio de optometrista é um valor fixo mensal (não escala com vendas) —
+  // só é contado uma vez, na loja principal do colaborador, para não pagar
+  // o mesmo prémio em duplicado se ele também vendeu noutra loja.
+  if(isHome && (role==='OPTOMETRISTA' || role==='OPTOMETRISTA PIVOT')){
     const bracket = STORE_REVENUE_BRACKET[gid];
     const base = bracket ? tieredLookup(PREMIO_TABLES[bracket], storePct) : null;
     const pivotPct = PIVOT_PCT_OVERRIDE[gid]!==undefined ? PIVOT_PCT_OVERRIDE[gid] : PIVOT_PCT_DEFAULT;
     premio = base!==null ? (role==='OPTOMETRISTA PIVOT' ? base*pivotPct : base) : 0;
   }
 
-  // Projeção fim do mês: projeta as vendas do vendedor E da loja ao mesmo
-  // ritmo diário, recalcula o escalão de comissão/prémio com base nisso.
+  // Projeção fim do mês: projeta as vendas nesta loja e o objetivo da loja
+  // ao mesmo ritmo diário, recalcula o escalão de comissão/prémio com base nisso.
   const spProj = storeMonthlyPctProjected(gid, sp.target);
-  const projSales = projectValue('MTD', sales);
+  const projSales = projectValue('MTD', salesAcc);
   const projCommPct = tieredLookup(COMMISSION_TABLE, spProj.pct);
   const projComissao = (projCommPct!==null && projSales) ? projCommPct*projSales : 0;
   let projPremio = 0;
-  if(role==='OPTOMETRISTA' || role==='OPTOMETRISTA PIVOT'){
+  if(isHome && (role==='OPTOMETRISTA' || role==='OPTOMETRISTA PIVOT')){
     const bracket = STORE_REVENUE_BRACKET[gid];
     const base = bracket ? tieredLookup(PREMIO_TABLES[bracket], spProj.pct) : null;
     const pivotPct = PIVOT_PCT_OVERRIDE[gid]!==undefined ? PIVOT_PCT_OVERRIDE[gid] : PIVOT_PCT_DEFAULT;
@@ -1255,8 +1255,8 @@ function computeCommission(empId, emp){
   }
   const projTotal = projComissao + projPremio;
 
-  return {role, sales, storePct, commPct, comissao, premio, total:comissao+premio, incomplete:false, targetSource:sp.source,
-          projSales, projStorePct:spProj.pct, projCommPct, projTotal};
+  return {role, sales:salesAcc, storePct, commPct, comissao, premio, total:comissao+premio, incomplete:false, targetSource:sp.source,
+          isHome, projSales, projStorePct:spProj.pct, projCommPct, projTotal};
 }
 
 function renderCommissionsView(){
@@ -1268,9 +1268,19 @@ function renderCommissionsView(){
   const emps = empList().filter(e=>e.store);
   const byStore = {};
   emps.forEach(e=>{
-    const gid = e.store.global_id;
-    byStore[gid] = byStore[gid] || {name: e.store.store_name, items:[]};
-    byStore[gid].items.push(e);
+    const homeGid = e.store.global_id;
+    const bs = (e.periods.MTD || {}).by_store || {};
+    const entries = Object.entries(bs).filter(([gid,s])=> s.com && s.com.net_sales>0);
+    if(entries.length===0){
+      // sem vendas comerciais em lado nenhum este mês — mostra à mesma na loja principal, a 0€
+      byStore[homeGid] = byStore[homeGid] || {name: e.store.store_name, items:[]};
+      byStore[homeGid].items.push({emp:e, gid:homeGid, salesAcc:0, isHome:true});
+    }else{
+      entries.forEach(([gid,s])=>{
+        byStore[gid] = byStore[gid] || {name: s.store_name, items:[]};
+        byStore[gid].items.push({emp:e, gid, salesAcc: s.acc ? (s.acc.net_sales||0) : 0, isHome: gid===homeGid});
+      });
+    }
   });
 
   const missingRole = emps.filter(e=>!ROLES[e.id]);
@@ -1289,14 +1299,15 @@ function renderCommissionsView(){
     storesHtml += `<div class="section"><h2>${grp.name}</h2>
       <p class="empty-note" style="margin-top:-6px;">Objetivo mensal atingido: <b style="color:var(--ink)">${sp.pct!==null?fmtPct(sp.pct):'sem objetivo definido'}</b>${sp.pct===null?' (define o objetivo mensal desta loja na aba Objetivos para calcular as comissões)':''}${spProj.pct!==null?` · Projeção fim do mês: <b style="color:var(--ink)">${fmtPct(spProj.pct)}</b>`:''} · Escalão de faturação (ano anterior): <b style="color:var(--ink)">${bracket}</b> · Optometrista Pivot recebe <b style="color:var(--ink)">${fmtPct(pivotPct)}</b> do prémio nesta loja</p>
       <div class="panel table-scroll"><table><thead><tr>
-        <th>Colaborador</th><th>Função</th><th class="num">Vendas (contab., mês)</th><th class="num">% Comissão</th><th class="num">Comissão</th><th class="num">Prémio</th><th class="num">Total</th><th class="num">Total projetado (fim do mês)</th>
+        <th>Colaborador</th><th>Função</th><th class="num">Vendas nesta loja (contab., mês)</th><th class="num">% Comissão</th><th class="num">Comissão</th><th class="num">Prémio</th><th class="num">Total</th><th class="num">Total projetado (fim do mês)</th>
       </tr></thead><tbody>`;
-    grp.items.sort((a,b)=>a.id.localeCompare(b.id)).forEach(e=>{
+    grp.items.sort((a,b)=>a.emp.id.localeCompare(b.emp.id)).forEach(item=>{
+      const e = item.emp;
       const nm = getName(e.id) || e.id;
-      const c = computeCommission(e.id, e);
+      const c = computeCommissionAtStore(e.id, e, item.gid, item.salesAcc, item.isHome);
       grandComissao += c.comissao; grandPremio += c.premio; grandProj += (c.projTotal||0);
       storesHtml += `<tr>
-        <td>${nm}</td>
+        <td>${nm}${!item.isHome ? ` <span class="pill flat" style="background:var(--amber-soft); color:var(--amber);">visitante</span>` : ''}</td>
         <td>${c.role ? c.role.charAt(0)+c.role.slice(1).toLowerCase() : '<span class="pill down">por definir</span>'}</td>
         <td class="num">${c.sales!==null ? fmtEUR(c.sales) : '—'}</td>
         <td class="num">${c.commPct!==null&&c.commPct!==undefined ? fmtPct(c.commPct) : '—'}</td>
@@ -1316,7 +1327,7 @@ function renderCommissionsView(){
       <div class="card"><div class="label">Total geral projetado (fim do mês)</div><div class="value small" style="color:var(--brass);">${fmtEURf(grandProj)}</div></div>
     </div>`;
   html += storesHtml;
-  html += `<p class="empty-note" style="margin:-10px 0 16px;">A projeção assume que cada vendedor e a respetiva loja continuam a vender ao mesmo ritmo diário médio até ao fim do mês (calendário gregoriano) — é uma estimativa, recalculada com o novo escalão de comissão/prémio que resultaria desse ritmo, não uma garantia de valor a receber.</p>
+  html += `<p class="empty-note" style="margin:-10px 0 16px;">Cada loja mostra todos os colaboradores que aí tiveram vendas comerciais este mês — incluindo quem não é dessa loja (marcado como "visitante"). O prémio de optometrista só é contado uma vez, na loja principal de cada pessoa, para não duplicar o valor. A projeção assume que cada vendedor e a respetiva loja continuam a vender ao mesmo ritmo diário médio até ao fim do mês (calendário gregoriano) — é uma estimativa, recalculada com o novo escalão de comissão/prémio que resultaria desse ritmo, não uma garantia de valor a receber.</p>
   <div class="foot-note">Tabelas de comissão/prémio e escalões de faturação replicados do mapa de comissões Aguiar&amp;Biscaia. Diz-me se quiseres torná-los editáveis diretamente no painel.</div>`;
 
   main.innerHTML = html;
