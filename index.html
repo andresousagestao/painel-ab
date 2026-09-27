@@ -1224,20 +1224,27 @@ function storeMonthlyPctProjected(gid, target){
 }
 function computeCommissionAtStore(empId, emp, gid, salesAcc, isHome){
   const role = ROLES[empId] || null;
-  if(!role) return {role, sales:salesAcc, comissao:0, premio:0, total:0, incomplete:true};
+  if(!role) return {role, displayRole:role, sales:salesAcc, comissao:0, premio:0, total:0, incomplete:true};
+  // Um Optometrista "base" que está a vender numa loja que não é a sua
+  // principal atua, nessa loja, como Optometrista Pivot (prémio reduzido
+  // pela % de pivot da loja visitada). Na loja principal mantém-se Optometrista.
+  const displayRole = (role==='OPTOMETRISTA' && !isHome) ? 'OPTOMETRISTA PIVOT' : role;
+  const premioAppliesHere = isHome || (role==='OPTOMETRISTA' && !isHome);
+
   const sp = storeMonthlyPct(gid);
   const storePct = sp.pct;
   const commPct = tieredLookup(COMMISSION_TABLE, storePct);
   const comissao = (commPct!==null && salesAcc) ? commPct*salesAcc : 0;
   let premio = 0;
-  // O prémio de optometrista é um valor fixo mensal (não escala com vendas) —
-  // só é contado uma vez, na loja principal do colaborador, para não pagar
-  // o mesmo prémio em duplicado se ele também vendeu noutra loja.
-  if(isHome && (role==='OPTOMETRISTA' || role==='OPTOMETRISTA PIVOT')){
+  // O prémio de optometrista é um valor fixo mensal (não escala com vendas).
+  // Na loja principal conta-se inteiro (ou à % de pivot, se a função já for
+  // Optometrista Pivot); numa loja visitada só conta se o "empréstimo" acima
+  // se aplicar, e sempre à % de pivot dessa loja.
+  if(premioAppliesHere && (role==='OPTOMETRISTA' || role==='OPTOMETRISTA PIVOT')){
     const bracket = STORE_REVENUE_BRACKET[gid];
     const base = bracket ? tieredLookup(PREMIO_TABLES[bracket], storePct) : null;
     const pivotPct = PIVOT_PCT_OVERRIDE[gid]!==undefined ? PIVOT_PCT_OVERRIDE[gid] : PIVOT_PCT_DEFAULT;
-    premio = base!==null ? (role==='OPTOMETRISTA PIVOT' ? base*pivotPct : base) : 0;
+    premio = base!==null ? (displayRole==='OPTOMETRISTA PIVOT' ? base*pivotPct : base) : 0;
   }
 
   // Projeção fim do mês: projeta as vendas nesta loja e o objetivo da loja
@@ -1247,15 +1254,15 @@ function computeCommissionAtStore(empId, emp, gid, salesAcc, isHome){
   const projCommPct = tieredLookup(COMMISSION_TABLE, spProj.pct);
   const projComissao = (projCommPct!==null && projSales) ? projCommPct*projSales : 0;
   let projPremio = 0;
-  if(isHome && (role==='OPTOMETRISTA' || role==='OPTOMETRISTA PIVOT')){
+  if(premioAppliesHere && (role==='OPTOMETRISTA' || role==='OPTOMETRISTA PIVOT')){
     const bracket = STORE_REVENUE_BRACKET[gid];
     const base = bracket ? tieredLookup(PREMIO_TABLES[bracket], spProj.pct) : null;
     const pivotPct = PIVOT_PCT_OVERRIDE[gid]!==undefined ? PIVOT_PCT_OVERRIDE[gid] : PIVOT_PCT_DEFAULT;
-    projPremio = base!==null ? (role==='OPTOMETRISTA PIVOT' ? base*pivotPct : base) : 0;
+    projPremio = base!==null ? (displayRole==='OPTOMETRISTA PIVOT' ? base*pivotPct : base) : 0;
   }
   const projTotal = projComissao + projPremio;
 
-  return {role, sales:salesAcc, storePct, commPct, comissao, premio, total:comissao+premio, incomplete:false, targetSource:sp.source,
+  return {role, displayRole, sales:salesAcc, storePct, commPct, comissao, premio, total:comissao+premio, incomplete:false, targetSource:sp.source,
           isHome, projSales, projStorePct:spProj.pct, projCommPct, projTotal};
 }
 
@@ -1308,7 +1315,7 @@ function renderCommissionsView(){
       grandComissao += c.comissao; grandPremio += c.premio; grandProj += (c.projTotal||0);
       storesHtml += `<tr>
         <td>${nm}${!item.isHome ? ` <span class="pill flat" style="background:var(--amber-soft); color:var(--amber);">visitante</span>` : ''}</td>
-        <td>${c.role ? c.role.charAt(0)+c.role.slice(1).toLowerCase() : '<span class="pill down">por definir</span>'}</td>
+        <td>${c.displayRole ? c.displayRole.charAt(0)+c.displayRole.slice(1).toLowerCase() : '<span class="pill down">por definir</span>'}</td>
         <td class="num">${c.sales!==null ? fmtEUR(c.sales) : '—'}</td>
         <td class="num">${c.commPct!==null&&c.commPct!==undefined ? fmtPct(c.commPct) : '—'}</td>
         <td class="num">${fmtEURf(c.comissao)}</td>
