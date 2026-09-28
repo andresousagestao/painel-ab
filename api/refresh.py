@@ -32,7 +32,7 @@ ID_STORE_RE = re.compile(r'^st([mo])(\d{3})[a-z]\d*$', re.I)
 PERIODS = ['LD', 'WTD', 'MTD', 'QTD', 'YTD']
 
 ADDITIVE = {'net_sales', 'sales_opt', 'sales_sun', 'sales_cl', 'sales_oth', 'cp_volume',
-            'opt_volume', 'vaas', 'vaas_volume', 'insurance_sales', 'vs_tgt_eur', 'second_pair_volume'}
+            'opt_volume', 'vaas', 'vaas_volume', 'insurance_sales', 'vs_tgt_eur', 'second_pair_volume', 'first_pair_volume'}
 VOL_KEY = {'com': 'cp_volume', 'acc': 'opt_volume'}
 ASP_KEY = {'com': 'cp_asp', 'acc': 'opt_asp'}
 
@@ -42,6 +42,7 @@ COM_KEYS = {
     'sales_cl': 'CATEGORY SALES | Net Sales CL', 'sales_oth': 'CATEGORY SALES | Net Sales OTH',
     'cp_volume': 'COMPLETE PAIR | Volume', 'cp_asp': 'COMPLETE PAIR | ASP',
     'second_pair_volume': '2ND PAIR CP | Volume', 'second_pair_penetration_pct': '2ND PAIR CP | Penetration %',
+    'first_pair_volume': '1ST PAIR CP | Volume',
     'mf_pct': 'OPTICAL KPI | MF %', 'photochromic_pct': 'OPTICAL KPI | Photochromic %',
     'blue_pct': 'OPTICAL KPI | Blue %', 'vaas': 'OPTICAL KPI | VaaS €',
     'vaas_volume': 'OPTICAL KPI | VaaS Volume', 'vaas_share_pct': 'OPTICAL KPI | VaaS Share %',
@@ -53,6 +54,7 @@ ACC_KEYS = {
     'sales_cl': 'CATEGORY NET SALES | Sales CL', 'sales_oth': 'CATEGORY NET SALES | Sales OTH',
     'opt_volume': 'TOTAL OPTICAL | Volume', 'opt_asp': 'TOTAL OPTICAL | ASP',
     'second_pair_volume': '2ND PAIR CP | Volume', 'second_pair_penetration_pct': '2ND PAIR CP | Penetration %',
+    'first_pair_volume': '1ST PAIR CP | Volume', 'cp_volume': 'COMPLETE PAIR | Volume',
     'mf_pct': 'OPTICAL KPI | MF %', 'photochromic_pct': 'OPTICAL KPI | Photochromic %',
     'blue_pct': 'OPTICAL KPI | Blue %', 'vaas': 'OPTICAL KPI | VaaS Sales',
     'vaas_volume': 'OPTICAL KPI | VaaS Volume', 'vaas_share_pct': 'OPTICAL KPI | VaaS Share',
@@ -136,6 +138,24 @@ def combine_period_rows(rows, keys, kind):
     for k in keys:
         if total.get(k) is None and k not in ADDITIVE:
             total[k] = dominant.get(k)
+    # Percentagens de quem vendeu em mais do que uma loja: média ponderada pelo
+    # volume respetivo (em vez de copiar o valor da loja "dominante").
+    weight_of = {'mf_pct': 'cp_volume' if kind == 'com' else 'opt_volume',
+                 'photochromic_pct': 'cp_volume' if kind == 'com' else 'opt_volume',
+                 'blue_pct': 'cp_volume' if kind == 'com' else 'opt_volume',
+                 'second_pair_penetration_pct': 'first_pair_volume'}
+    for k, wk in weight_of.items():
+        if k not in keys or wk not in keys:
+            continue
+        num = den = 0.0
+        for m in mapped:
+            v, w = m.get(k), m.get(wk)
+            if not isinstance(v, (int, float)) or not isinstance(w, (int, float)) or not w:
+                continue
+            num += v * w
+            den += w
+        if den:
+            total[k] = num / den
     vk, ak = VOL_KEY[kind], ASP_KEY[kind]
     if vk in keys and ak in keys and total.get(vk):
         tot_sales = total.get('sales_opt')
