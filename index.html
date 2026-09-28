@@ -288,6 +288,25 @@ input[type="text"]:focus, input[type="number"]:focus, select:focus{ outline:2px 
 .tile h3{ font-family:var(--font-display); font-size:16.5px; margin:0; color:var(--ink); font-weight:400;}
 .tile p{ font-size:12.5px; color:var(--ink-soft); margin:0; line-height:1.5;}
 
+/* ---------- Ranking de Mix ---------- */
+.podium{ display:flex; align-items:flex-end; justify-content:center; gap:18px; margin:8px 0 30px; flex-wrap:wrap; }
+.podium-col{ display:flex; flex-direction:column; align-items:center; width:220px; }
+.podium-col .p-medal{ font-size:40px; line-height:1; margin-bottom:6px; }
+.podium-col.first .p-medal{ font-size:56px; }
+.podium-col .p-name{ font-family:var(--font-display); font-size:16px; text-align:center; color:var(--ink); margin-bottom:2px; }
+.podium-col.first .p-name{ font-size:20px; }
+.podium-col .p-store{ font-size:12.5px; color:var(--ink-soft); margin-bottom:8px; text-align:center; }
+.podium-col .p-pts{ font-family:var(--font-num); font-weight:700; font-size:24px; margin-bottom:8px; color:var(--ink); }
+.podium-col.first .p-pts{ font-size:34px; }
+.podium-col .p-block{ width:100%; border-radius:14px 14px 0 0; display:flex; align-items:flex-start; justify-content:center; padding-top:10px; font-family:var(--font-display); font-size:36px; color:#17181A; box-shadow:0 8px 18px rgba(0,0,0,0.14); }
+.podium-col.first .p-block{ height:160px; background:#C9A227; }
+.podium-col.second .p-block{ height:118px; background:#B8BEC6; }
+.podium-col.third .p-block{ height:86px; background:#C08A57; }
+.mix-bar{ flex:1; min-width:90px; height:13px; background:#E4E2DB; border-radius:7px; overflow:hidden; }
+.mix-bar > div{ height:100%; background:var(--brass); border-radius:7px; }
+.mix-sub{ font-size:11px; font-weight:500; color:var(--ink-soft); }
+tr.mix-top td{ background:rgba(201,162,39,0.10); }
+
 ::-webkit-scrollbar{ height:9px; width:9px; }
 ::-webkit-scrollbar-thumb{ background:var(--brass); border-radius:8px;}
 </style>
@@ -320,6 +339,7 @@ input[type="text"]:focus, input[type="number"]:focus, select:focus{ outline:2px 
       <button id="btn-view-vendor">Por vendedor</button>
       <button id="btn-view-team">Equipa</button>
       <button id="btn-view-storedetail">🏬 Por loja</button>
+      <button id="btn-view-mixranking">🏆 Ranking de Mix's A&amp;B</button>
       <button id="btn-view-goals">🎯 Objetivos das lojas</button>
       <button id="btn-view-commissions">💶 Comissões</button>
       <button id="btn-view-admin">🔒 Administrador</button>
@@ -643,6 +663,7 @@ function setActiveViewBtn(){
   document.getElementById('btn-view-vendor').classList.toggle('active', currentView==='vendor');
   document.getElementById('btn-view-team').classList.toggle('active', currentView==='team');
   document.getElementById('btn-view-storedetail').classList.toggle('active', currentView==='storedetail');
+  document.getElementById('btn-view-mixranking').classList.toggle('active', currentView==='mixranking');
   document.getElementById('btn-view-goals').classList.toggle('active', currentView==='goals');
   document.getElementById('btn-view-commissions').classList.toggle('active', currentView==='commissions');
   document.getElementById('btn-view-admin').classList.toggle('active', currentView==='admin');
@@ -1480,6 +1501,155 @@ function renderStoreDetailView(){
   });
 }
 
+/* ================= Ranking de Mix's A&B =================
+   Pontuação até 100, só com valores contabilísticos do mês (MTD).
+   Cada indicador vale o seu peso; quem tem o MELHOR valor nesse indicador
+   ganha o peso completo e os restantes ganham peso × (valor ÷ melhor valor).
+   "Atendimento" = par completo (o ficheiro contabilístico não traz o nº de
+   atendimentos por colaborador). */
+const MIX_KPIS = [
+  {key:'vaas_par',  short:'VaaS / Par',        label:'VaaS / Par',                         weight:20, fmt:'pct',
+   how:'subscrições VaaS ÷ pares completos'},
+  {key:'sun_atend', short:'Solares / atend.',   label:'Óculos solares por atendimento',      weight:6,  fmt:'eur2',
+   how:'vendas de solares (€) ÷ pares completos'},
+  {key:'cl_atend',  short:'Contact. / atend.',  label:'Contactologia por atendimento',       weight:4,  fmt:'eur2',
+   how:'vendas de lentes de contacto (€) ÷ pares completos'},
+  {key:'ticket',    short:'Ticket médio',       label:'Ticket médio',                        weight:20, fmt:'eur0',
+   how:'vendas contabilísticas totais (€) ÷ pares completos'},
+  {key:'pen2',      short:'Pen. 2.º par',       label:'Penetração de 2.ºs pares',            weight:15, fmt:'pct',
+   how:'2.ºs pares ÷ 1.ºs pares (valor do ficheiro)'},
+  {key:'mf',        short:'Pen. multifocais',   label:'Penetração de multifocais',           weight:15, fmt:'pct',
+   how:'% de multifocais (valor do ficheiro)'},
+  {key:'photo',     short:'% Fotocrom.',        label:'% Fotocromáticos',                    weight:10, fmt:'pct',
+   how:'% de fotocromáticos (valor do ficheiro)'},
+  {key:'blue',      short:'% Filtro luz azul',  label:'% Filtro de luzes artificiais',       weight:10, fmt:'pct',
+   how:'% de filtro de luz azul (valor do ficheiro)'},
+];
+let mixMinPairs = 10;
+
+function mixCompute(minPairs){
+  const rows = [], excluded = [];
+  const n = v => (typeof v==='number' && isFinite(v) && v>0) ? v : 0;
+  Object.entries(DATA.employees).forEach(([id,emp])=>{
+    const a = ((emp.periods||{}).MTD||{}).acc;
+    if(!a) return;
+    const cp = a.cp_volume;
+    const store = emp.store ? emp.store.store_name : '—';
+    if(!cp || cp < minPairs){
+      if((a.net_sales||0) > 0) excluded.push({id, store, cp: cp||0});
+      return;
+    }
+    rows.push({id, store, cp, raw:{
+      vaas_par:  n(a.vaas_volume)/cp,
+      sun_atend: n(a.sales_sun)/cp,
+      cl_atend:  n(a.sales_cl)/cp,
+      ticket:    n(a.net_sales)/cp,
+      pen2:      n(a.second_pair_penetration_pct),
+      mf:        n(a.mf_pct),
+      photo:     n(a.photochromic_pct),
+      blue:      n(a.blue_pct),
+    }});
+  });
+  const best = {};
+  MIX_KPIS.forEach(k=>{ best[k.key] = Math.max(0, ...rows.map(r=>r.raw[k.key])); });
+  rows.forEach(r=>{
+    r.pts = {}; r.total = 0;
+    MIX_KPIS.forEach(k=>{
+      const score = best[k.key] > 0 ? r.raw[k.key]/best[k.key] : 0;
+      r.pts[k.key] = score * k.weight;
+      r.total += r.pts[k.key];
+    });
+  });
+  rows.sort((a,b)=> b.total - a.total);
+  excluded.sort((a,b)=> b.cp - a.cp);
+  return {rows, excluded, best};
+}
+
+function mixFmtVal(k, v){
+  if(k.fmt==='pct') return fmtPct(v);
+  if(k.fmt==='eur2') return fmtEURf(v);
+  return fmtEUR(v);
+}
+const mixPts = v => v.toLocaleString('pt-PT',{minimumFractionDigits:1, maximumFractionDigits:1});
+
+function renderMixRankingView(){
+  const main = document.getElementById('main');
+  const {rows, excluded} = mixCompute(mixMinPairs);
+  const anyPairs = Object.values(DATA.employees).some(e=>{
+    const a = ((e.periods||{}).MTD||{}).acc; return a && a.cp_volume!==undefined;
+  });
+
+  let html = `<div class="topbar">
+    <div><h1>Ranking de Mix's A&amp;B</h1>
+    <div class="meta">Mês (MTD) · apenas valores contabilísticos · Snapshot: ${DATA.meta.snapshot_date}</div></div>
+    <div class="store-context">
+      <span>Mínimo de pares completos no mês para entrar no ranking:</span>
+      <input id="mix-min" type="number" min="0" step="1" value="${mixMinPairs}" style="width:76px;">
+    </div>
+  </div>`;
+
+  if(!anyPairs){
+    html += `<div class="panel"><p class="empty-note">Os dados atuais ainda não incluem o volume contabilístico de pares completos, necessário para este ranking. Atualiza também o ficheiro <b>api/refresh.py</b> no GitHub e recarrega os dados.</p></div>`;
+    main.innerHTML = html;
+    return;
+  }
+
+  // ---- Pódio ----
+  const top = rows.slice(0,3);
+  if(top.length){
+    const col = (r, cls, medal, pos) => r ? `<div class="podium-col ${cls}">
+        <div class="p-medal">${medal}</div>
+        <div class="p-name">${getName(r.id) || r.id}</div>
+        <div class="p-store">${r.store}</div>
+        <div class="p-pts">${mixPts(r.total)} pts</div>
+        <div class="p-block">${pos}</div>
+      </div>` : '';
+    html += `<div class="podium">${col(top[1],'second','🥈','2')}${col(top[0],'first','🥇','1')}${col(top[2],'third','🥉','3')}</div>`;
+  }else{
+    html += `<div class="panel"><p class="empty-note">Ninguém atinge o mínimo de ${mixMinPairs} pares completos este mês — baixa o valor acima para ver o ranking.</p></div>`;
+  }
+
+  // ---- Tabela completa ----
+  if(rows.length){
+    html += `<div class="section"><h2>Classificação completa</h2><div class="panel table-scroll"><table><thead><tr>
+      <th>#</th><th>Colaborador</th><th>Loja</th><th style="min-width:170px;">Pontos (máx. 100)</th>
+      ${MIX_KPIS.map(k=>`<th class="num">${k.short}<div class="mix-sub">peso ${k.weight}%</div></th>`).join('')}
+    </tr></thead><tbody>`;
+    rows.forEach((r,i)=>{
+      const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':'';
+      html += `<tr class="${i<3?'mix-top':''}">
+        <td style="font-weight:700;">${medal || (i+1)}</td>
+        <td><b>${getName(r.id) || r.id}</b>${getName(r.id)?`<div class="mix-sub">${r.id}</div>`:''}</td>
+        <td>${r.store}</td>
+        <td><div style="display:flex; align-items:center; gap:10px;"><div class="mix-bar"><div style="width:${Math.min(100,r.total)}%;"></div></div><b style="font-family:var(--font-num);">${mixPts(r.total)}</b></div></td>
+        ${MIX_KPIS.map(k=>`<td class="num"><div style="font-weight:700;">${mixFmtVal(k, r.raw[k.key])}</div><div class="mix-sub">${mixPts(r.pts[k.key])} pts</div></td>`).join('')}
+      </tr>`;
+    });
+    html += `</tbody></table></div></div>`;
+  }
+
+  if(excluded.length){
+    html += `<p class="empty-note" style="margin:-10px 0 20px;"><b>Fora do ranking (menos de ${mixMinPairs} pares completos):</b> ${excluded.map(x=>`${getName(x.id)||x.id} (${x.cp})`).join(' · ')}</p>`;
+  }
+
+  // ---- Como é calculado ----
+  html += `<div class="section"><h2>Como é calculado</h2><div class="panel">
+    <table><thead><tr><th>Indicador</th><th class="num">Peso</th><th>Cálculo</th></tr></thead><tbody>
+      ${MIX_KPIS.map(k=>`<tr><td>${k.label}</td><td class="num">${k.weight}%</td><td>${k.how}</td></tr>`).join('')}
+      <tr><td><b>Total</b></td><td class="num"><b>${MIX_KPIS.reduce((s,k)=>s+k.weight,0)}%</b></td><td></td></tr>
+    </tbody></table>
+    <p class="empty-note" style="margin-top:14px;">Em cada indicador, quem tem o melhor valor entre os colaboradores no ranking ganha os pontos todos desse indicador, e os restantes ganham o peso × (o seu valor ÷ o melhor valor). A soma dos 8 indicadores dá a pontuação final (máximo 100). "Atendimento" corresponde a um par completo, porque o ficheiro contabilístico não traz o número de atendimentos por colaborador. Nos solares e na contactologia usam-se valores em €, porque o mesmo ficheiro não tem unidades. Para o mínimo de pares completos evitar que amostras muito pequenas distorçam a escala, só entram colaboradores com pelo menos ${mixMinPairs} pares no mês.</p>
+  </div></div>`;
+
+  main.innerHTML = html;
+  const inp = document.getElementById('mix-min');
+  if(inp) inp.addEventListener('change', ()=>{
+    const v = parseInt(inp.value, 10);
+    mixMinPairs = (isNaN(v) || v<0) ? 0 : v;
+    renderMixRankingView();
+  });
+}
+
 function renderGoalsView(){
   const main = document.getElementById('main');
   if(!GOAL_PERIODS.includes(currentPeriod)) currentPeriod = 'MTD';
@@ -1672,6 +1842,7 @@ function renderHomeView(){
   const tiles = [
     {icon:'👤', title:'Por vendedor', desc:'Vendas, objetivos e indicadores de cada colaborador, dia a dia.', view:'vendor'},
     {icon:'👥', title:'Equipa', desc:'Ranking de vendedores e lojas, comparação e vista de gestão.', view:'team'},
+    {icon:'🏆', title:"Ranking de Mix's A&B", desc:'Pódio e classificação dos colaboradores, em pontos, com base nos KPIs do mês.', view:'mixranking'},
     {icon:'🏬', title:'Por loja', desc:'Vendas, projeção até ao fim do período e KPIs de cada loja.', view:'storedetail'},
     {icon:'🎯', title:'Objetivos das lojas', desc:'Acompanhamento do objetivo de cada loja e o que falta atingir.', view:'goals'},
     {icon:'💶', title:'Comissões', desc:'Cálculo mensal de comissões e prémios por colaborador.', view:'commissions'},
@@ -1700,6 +1871,7 @@ function renderAll(){
   else if(currentView==='vendor') renderVendorView();
   else if(currentView==='team') renderTeamView();
   else if(currentView==='storedetail') renderStoreDetailView();
+  else if(currentView==='mixranking') renderMixRankingView();
   else if(currentView==='goals') renderGoalsView();
   else if(currentView==='commissions') renderCommissionsView();
   else renderAdminView();
@@ -1710,6 +1882,7 @@ document.getElementById('btn-view-home').addEventListener('click', ()=>{ current
 document.getElementById('btn-view-vendor').addEventListener('click', ()=>{ currentView='vendor'; setActiveViewBtn(); renderAll(); });
 document.getElementById('btn-view-team').addEventListener('click', ()=>{ currentView='team'; setActiveViewBtn(); renderAll(); });
 document.getElementById('btn-view-storedetail').addEventListener('click', ()=>{ currentView='storedetail'; setActiveViewBtn(); renderAll(); });
+document.getElementById('btn-view-mixranking').addEventListener('click', ()=>{ currentView='mixranking'; setActiveViewBtn(); renderAll(); });
 document.getElementById('btn-view-goals').addEventListener('click', ()=>{ currentView='goals'; setActiveViewBtn(); renderAll(); });
 document.getElementById('btn-view-commissions').addEventListener('click', ()=>{ currentView='commissions'; setActiveViewBtn(); renderAll(); });
 document.getElementById('btn-view-admin').addEventListener('click', ()=>{ currentView='admin'; setActiveViewBtn(); renderAll(); });
