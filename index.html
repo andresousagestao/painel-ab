@@ -309,6 +309,20 @@ tr.mix-top td{ background:rgba(201,162,39,0.10); }
 
 ::-webkit-scrollbar{ height:9px; width:9px; }
 ::-webkit-scrollbar-thumb{ background:var(--brass); border-radius:8px;}
+
+@media print{
+  @page{ size: A4; margin: 14mm; }
+  body{ background:#FFFFFF; }
+  .sidebar, .no-print{ display:none !important; }
+  .app{ display:block; }
+  .main{ padding:0; }
+  .card, .panel, .goal-card{ box-shadow:none; border:1px solid #ccc; break-inside:avoid; }
+  .section{ break-inside:avoid; margin-bottom:14px; }
+  table{ font-size:11px; }
+  th, td{ padding:5px 6px; }
+  .topbar h1{ font-size:20px; }
+  a[href]:after{ content:""; }
+}
 </style>
 </head>
 <body>
@@ -1291,6 +1305,7 @@ function renderCommissionsView(){
   const main = document.getElementById('main');
   let html = `<div class="topbar">
     <div><h1>Comissões</h1><div class="meta">Cálculo mensal, sobre valores contabilísticos · Snapshot: ${DATA.meta.snapshot_date}</div></div>
+    <button id="btn-print-commissions" class="no-print" style="text-decoration:none; border:1px solid var(--brass); background:var(--brass); color:#fff; border-radius:8px; padding:8px 14px; font-weight:600; cursor:pointer; font-family:var(--font-body); font-size:13px;">🖨️ Gerar PDF</button>
   </div>`;
 
   const emps = empList().filter(e=>e.store);
@@ -1358,9 +1373,11 @@ function renderCommissionsView(){
     </div>`;
   html += storesHtml;
   html += `<p class="empty-note" style="margin:-10px 0 16px;">Cada loja mostra todos os colaboradores que aí tiveram vendas comerciais este mês — incluindo quem não é dessa loja (marcado como "visitante"). O prémio de optometrista só é contado uma vez, na loja principal de cada pessoa, para não duplicar o valor. A projeção assume que cada vendedor e a respetiva loja continuam a vender ao mesmo ritmo diário médio até ao fim do mês (calendário comercial trimestral, 4-4-5), recalculada com o novo escalão de comissão/prémio que resultaria desse ritmo — é uma estimativa, não uma garantia. Para evitar projeções irrealistas logo no início do mês, o multiplicador usado nunca passa de ${PROJECTION_MAX_MULTIPLIER}×, mesmo quando a conta pelos dias decorridos daria mais — mas a projeção aparece sempre, desde o 1.º dia do período.</p>
-  <div class="foot-note">Tabelas de comissão/prémio e escalões de faturação replicados do mapa de comissões Aguiar&amp;Biscaia. Diz-me se quiseres torná-los editáveis diretamente no painel.</div>`;
+`;
 
   main.innerHTML = html;
+  const printBtn = document.getElementById('btn-print-commissions');
+  if(printBtn) printBtn.addEventListener('click', ()=> window.print());
 }
 
 function parseSnapshotDate(){
