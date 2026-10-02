@@ -1337,6 +1337,9 @@ function renderCommissionsView(){
   let storesHtml = '';
 
   Object.entries(byStore).sort((a,b)=>a[1].name.localeCompare(b[1].name)).forEach(([gid,grp])=>{
+    const visibleItems = grp.items.filter(item=> (item.salesAcc||0) > 0);
+    if(!visibleItems.length) return; // ninguém com vendas contabilísticas nesta loja — omite a secção toda
+
     const sp = storeMonthlyPct(gid);
     const spProj = storeMonthlyPctProjected(gid, sp.target);
     const bracket = STORE_REVENUE_BRACKET[gid] || '—';
@@ -1346,7 +1349,7 @@ function renderCommissionsView(){
       <div class="panel table-scroll"><table><thead><tr>
         <th>Colaborador</th><th>Função</th><th class="num">Vendas nesta loja (contab., mês)</th><th class="num">% Comissão</th><th class="num">Comissão</th><th class="num">Prémio</th><th class="num">Total</th><th class="num">Total projetado (fim do mês)</th>
       </tr></thead><tbody>`;
-    grp.items.sort((a,b)=>a.emp.id.localeCompare(b.emp.id)).forEach(item=>{
+    visibleItems.sort((a,b)=>a.emp.id.localeCompare(b.emp.id)).forEach(item=>{
       const e = item.emp;
       const nm = getName(e.id) || e.id;
       const c = computeCommissionAtStore(e.id, e, item.gid, item.salesAcc, item.isHome);
