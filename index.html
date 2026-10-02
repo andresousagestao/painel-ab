@@ -1281,7 +1281,7 @@ function computeCommissionAtStore(empId, emp, gid, salesAcc, isHome){
     const pivotPct = PIVOT_PCT_OVERRIDE[gid]!==undefined ? PIVOT_PCT_OVERRIDE[gid] : PIVOT_PCT_DEFAULT;
     projPremio = base!==null ? (displayRole==='OPTOMETRISTA PIVOT' ? base*pivotPct : base) : 0;
   }
-  const projTotal = projComissao + projPremio;
+  const projTotal = (projSales===null) ? null : (projComissao + projPremio);
 
   return {role, displayRole, sales:salesAcc, storePct, commPct, comissao, premio, total:comissao+premio, incomplete:false, targetSource:sp.source,
           isHome, projSales, projStorePct:spProj.pct, projCommPct, projTotal};
@@ -1357,7 +1357,7 @@ function renderCommissionsView(){
       <div class="card"><div class="label">Total geral projetado (fim do mês)</div><div class="value small" style="color:var(--brass);">${fmtEURf(grandProj)}</div></div>
     </div>`;
   html += storesHtml;
-  html += `<p class="empty-note" style="margin:-10px 0 16px;">Cada loja mostra todos os colaboradores que aí tiveram vendas comerciais este mês — incluindo quem não é dessa loja (marcado como "visitante"). O prémio de optometrista só é contado uma vez, na loja principal de cada pessoa, para não duplicar o valor. A projeção assume que cada vendedor e a respetiva loja continuam a vender ao mesmo ritmo diário médio até ao fim do mês (calendário gregoriano) — é uma estimativa, recalculada com o novo escalão de comissão/prémio que resultaria desse ritmo, não uma garantia de valor a receber.</p>
+  html += `<p class="empty-note" style="margin:-10px 0 16px;">Cada loja mostra todos os colaboradores que aí tiveram vendas comerciais este mês — incluindo quem não é dessa loja (marcado como "visitante"). O prémio de optometrista só é contado uma vez, na loja principal de cada pessoa, para não duplicar o valor. A projeção assume que cada vendedor e a respetiva loja continuam a vender ao mesmo ritmo diário médio até ao fim do mês (calendário gregoriano), recalculada com o novo escalão de comissão/prémio que resultaria desse ritmo — é uma estimativa, não uma garantia. Para evitar projeções irrealistas logo no início do mês, só aparece projeção depois de decorridos pelo menos ${Math.round(PROJECTION_MIN_ELAPSED_FRACTION*100)}% do período (mostra "—" antes disso), e nunca multiplica o valor atual por mais de ${PROJECTION_MAX_MULTIPLIER}×.</p>
   <div class="foot-note">Tabelas de comissão/prémio e escalões de faturação replicados do mapa de comissões Aguiar&amp;Biscaia. Diz-me se quiseres torná-los editáveis diretamente no painel.</div>`;
 
   main.innerHTML = html;
@@ -1407,11 +1407,21 @@ function periodElapsedFraction(period){
   return null;
 }
 
+const PROJECTION_MIN_ELAPSED_FRACTION = 0.20; // exige ≥20% do período decorrido
+const PROJECTION_MAX_MULTIPLIER = 3;          // nunca multiplica mais do que 3x o valor atual
+
 function projectValue(period, actual){
   if(actual===null||actual===undefined) return null;
   const f = periodElapsedFraction(period);
   if(!f || !f.elapsed) return null;
-  return actual * (f.total / f.elapsed);
+  // Com muito poucos dias decorridos, multiplicar o resultado desses dias
+  // pelo período inteiro dá números irrealistas (ex: dia 2 de 30 → ×15).
+  // Por isso só se projeta a partir de uma fatia mínima do período, e o
+  // multiplicador nunca passa de um teto fixo, mesmo que o rácio dias dê mais.
+  const minElapsed = Math.max(1, Math.ceil(f.total * PROJECTION_MIN_ELAPSED_FRACTION));
+  if(f.elapsed < minElapsed) return null;
+  const multiplier = Math.min(f.total / f.elapsed, PROJECTION_MAX_MULTIPLIER);
+  return actual * multiplier;
 }
 
 let currentStoreSel = null;
@@ -1467,7 +1477,7 @@ function renderStoreDetailView(){
     </div>
   </div>`;
 
-  html += `<p class="empty-note" style="margin:-8px 0 18px;">A projeção assume que a loja continua a vender ao mesmo ritmo diário médio até ao fim do período (calendário gregoriano) — é uma estimativa, não uma garantia. Vendas comerciais também projetadas: ${projCom!==null?fmtEUR(projCom):'—'}.</p>`;
+  html += `<p class="empty-note" style="margin:-8px 0 18px;">A projeção assume que a loja continua a vender ao mesmo ritmo diário médio até ao fim do período (calendário gregoriano) — é uma estimativa, não uma garantia. Só aparece depois de decorridos pelo menos ${Math.round(PROJECTION_MIN_ELAPSED_FRACTION*100)}% do período, e nunca multiplica o valor atual por mais de ${PROJECTION_MAX_MULTIPLIER}×. Vendas comerciais também projetadas: ${projCom!==null?fmtEUR(projCom):'—'}.</p>`;
 
   html += `<div class="section">
     <h2>Indicadores óticos (contabilístico) — ${PLABELS[currentPeriod]}</h2>
