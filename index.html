@@ -1357,7 +1357,7 @@ function renderCommissionsView(){
       <div class="card"><div class="label">Total geral projetado (fim do mês)</div><div class="value small" style="color:var(--brass);">${fmtEURf(grandProj)}</div></div>
     </div>`;
   html += storesHtml;
-  html += `<p class="empty-note" style="margin:-10px 0 16px;">Cada loja mostra todos os colaboradores que aí tiveram vendas comerciais este mês — incluindo quem não é dessa loja (marcado como "visitante"). O prémio de optometrista só é contado uma vez, na loja principal de cada pessoa, para não duplicar o valor. A projeção assume que cada vendedor e a respetiva loja continuam a vender ao mesmo ritmo diário médio até ao fim do mês (calendário gregoriano), recalculada com o novo escalão de comissão/prémio que resultaria desse ritmo — é uma estimativa, não uma garantia. Para evitar projeções irrealistas logo no início do mês, só aparece projeção depois de decorridos pelo menos ${Math.round(PROJECTION_MIN_ELAPSED_FRACTION*100)}% do período (mostra "—" antes disso), e nunca multiplica o valor atual por mais de ${PROJECTION_MAX_MULTIPLIER}×.</p>
+  html += `<p class="empty-note" style="margin:-10px 0 16px;">Cada loja mostra todos os colaboradores que aí tiveram vendas comerciais este mês — incluindo quem não é dessa loja (marcado como "visitante"). O prémio de optometrista só é contado uma vez, na loja principal de cada pessoa, para não duplicar o valor. A projeção assume que cada vendedor e a respetiva loja continuam a vender ao mesmo ritmo diário médio até ao fim do mês (calendário comercial trimestral, 4-4-5), recalculada com o novo escalão de comissão/prémio que resultaria desse ritmo — é uma estimativa, não uma garantia. Para evitar projeções irrealistas logo no início do mês, o multiplicador usado nunca passa de ${PROJECTION_MAX_MULTIPLIER}×, mesmo quando a conta pelos dias decorridos daria mais — mas a projeção aparece sempre, desde o 1.º dia do período.</p>
   <div class="foot-note">Tabelas de comissão/prémio e escalões de faturação replicados do mapa de comissões Aguiar&amp;Biscaia. Diz-me se quiseres torná-los editáveis diretamente no painel.</div>`;
 
   main.innerHTML = html;
@@ -1371,55 +1371,88 @@ function parseSnapshotDate(){
 
 function isLeapYear(y){ return (y%4===0 && y%100!==0) || y%400===0; }
 
+/* Calendário comercial trimestral da empresa: ano comercial alinhado com
+   o ano civil (começa em janeiro), semanas de segunda a domingo, e cada
+   trimestre com o padrão 4-4-5 (13 semanas: dois meses de 4 semanas e um
+   de 5). A Semana 1 é sempre a que começa na primeira segunda-feira de
+   janeiro — confirmado contra a coluna "Fiscal Week" dos vossos ficheiros
+   (ex: 19/09/2026 cai na semana fiscal 37, exatamente 36 semanas completas
+   após a segunda-feira de 5/01/2026, a primeira segunda-feira desse ano).
+   Assume-se um ano comercial "normal" de 52 semanas (364 dias); o raro ano
+   de 53 semanas não é tratado à parte. */
+function fiscalYearWeek1Monday(year){
+  const jan1 = new Date(year, 0, 1);
+  const dow = jan1.getDay(); // 0=domingo ... 6=sábado
+  const offsetToMonday = (1 - dow + 7) % 7; // dias até à 1ª segunda-feira (0 se já for segunda)
+  return new Date(year, 0, 1 + offsetToMonday);
+}
+
 /* Calcula, para o período selecionado, quantos dias já passaram e quantos
-   dias tem o período no total (calendário gregoriano) — usado para projetar
-   o valor final assumindo o mesmo ritmo de vendas. Devolve null para "Dia"
-   (não há o que projetar num único dia). */
+   dias tem o período no total, segundo o calendário comercial trimestral
+   (não o calendário gregoriano) — usado para projetar o valor final
+   assumindo o mesmo ritmo de vendas. Devolve null para "Dia" (não há o
+   que projetar num único dia). */
 function periodElapsedFraction(period){
   const dt = parseSnapshotDate();
   if(!dt || period==='LD') return null;
-  const y = dt.getFullYear(), m = dt.getMonth(); // 0-based month
-  if(period==='MTD'){
-    const totalDays = new Date(y, m+1, 0).getDate();
-    const elapsed = dt.getDate();
-    return {elapsed, total: totalDays};
+
+  const year = dt.getFullYear();
+  let week1Monday = fiscalYearWeek1Monday(year);
+  // Se a data cair antes da semana 1 do "seu" ano (pode acontecer nos
+  // primeiros dias de janeiro), pertence ainda ao ano comercial anterior.
+  let fiscalYear = year;
+  if(dt < week1Monday){
+    fiscalYear = year - 1;
+    week1Monday = fiscalYearWeek1Monday(fiscalYear);
   }
-  if(period==='YTD'){
-    const totalDays = isLeapYear(y) ? 366 : 365;
-    const start = new Date(y,0,1);
-    const elapsed = Math.floor((dt-start)/86400000) + 1;
-    return {elapsed, total: totalDays};
-  }
-  if(period==='QTD'){
-    const qStartMonth = Math.floor(m/3)*3;
-    const start = new Date(y, qStartMonth, 1);
-    const end = new Date(y, qStartMonth+3, 0);
-    const totalDays = Math.floor((end-start)/86400000) + 1;
-    const elapsed = Math.floor((dt-start)/86400000) + 1;
-    return {elapsed, total: totalDays};
-  }
+
+  const daysSinceWeek1 = Math.floor((dt - week1Monday) / 86400000);
+  const fiscalWeek = Math.floor(daysSinceWeek1 / 7);       // 0-based: 0 = semana 1
+  const dayInWeek = daysSinceWeek1 % 7;                    // 0 = segunda-feira
+
   if(period==='WTD'){
-    // semana de calendário, segunda a domingo
-    const dow = (dt.getDay()+6)%7; // 0=segunda ... 6=domingo
-    const start = new Date(y, m, dt.getDate()-dow);
-    return {elapsed: dow+1, total: 7};
+    return {elapsed: dayInWeek+1, total: 7};
   }
+
+  const quarterIndex = Math.floor(fiscalWeek / 13);        // 0-3
+  const weekInQuarter = fiscalWeek % 13;                   // 0-12
+  const quarterStartWeek = quarterIndex * 13;
+
+  if(period==='QTD'){
+    const quarterStart = new Date(week1Monday.getTime() + quarterStartWeek*7*86400000);
+    const elapsed = Math.floor((dt - quarterStart)/86400000) + 1;
+    return {elapsed, total: 13*7};
+  }
+
+  if(period==='MTD'){
+    // 4-4-5: semanas 0-3 do trimestre = 1º mês, 4-7 = 2º mês, 8-12 = 3º mês (5 semanas)
+    const monthInQuarter = weekInQuarter < 4 ? 0 : (weekInQuarter < 8 ? 1 : 2);
+    const monthStartWeek = quarterStartWeek + (monthInQuarter===0 ? 0 : monthInQuarter===1 ? 4 : 8);
+    const monthTotalWeeks = monthInQuarter===2 ? 5 : 4;
+    const monthStart = new Date(week1Monday.getTime() + monthStartWeek*7*86400000);
+    const elapsed = Math.floor((dt - monthStart)/86400000) + 1;
+    return {elapsed, total: monthTotalWeeks*7};
+  }
+
+  if(period==='YTD'){
+    const elapsed = daysSinceWeek1 + 1;
+    return {elapsed, total: 52*7};
+  }
+
   return null;
 }
 
-const PROJECTION_MIN_ELAPSED_FRACTION = 0.20; // exige ≥20% do período decorrido
-const PROJECTION_MAX_MULTIPLIER = 3;          // nunca multiplica mais do que 3x o valor atual
+const PROJECTION_MAX_MULTIPLIER = 3; // nunca multiplica mais do que 3x o valor atual, mesmo nos primeiros dias
 
 function projectValue(period, actual){
   if(actual===null||actual===undefined) return null;
   const f = periodElapsedFraction(period);
   if(!f || !f.elapsed) return null;
-  // Com muito poucos dias decorridos, multiplicar o resultado desses dias
-  // pelo período inteiro dá números irrealistas (ex: dia 2 de 30 → ×15).
-  // Por isso só se projeta a partir de uma fatia mínima do período, e o
-  // multiplicador nunca passa de um teto fixo, mesmo que o rácio dias dê mais.
-  const minElapsed = Math.max(1, Math.ceil(f.total * PROJECTION_MIN_ELAPSED_FRACTION));
-  if(f.elapsed < minElapsed) return null;
+  // Usa sempre os dias do calendário comercial trimestral (4-4-5) da empresa,
+  // incluindo fevereiro/anos bissextos) para calcular dias decorridos vs
+  // dias totais do período — mostra sempre uma projeção, mas o
+  // multiplicador tem um teto fixo para não disparar nos primeiros dias
+  // (ex: dia 2 de 30 não vira ×15, fica no máximo em ${PROJECTION_MAX_MULTIPLIER}×).
   const multiplier = Math.min(f.total / f.elapsed, PROJECTION_MAX_MULTIPLIER);
   return actual * multiplier;
 }
@@ -1477,7 +1510,7 @@ function renderStoreDetailView(){
     </div>
   </div>`;
 
-  html += `<p class="empty-note" style="margin:-8px 0 18px;">A projeção assume que a loja continua a vender ao mesmo ritmo diário médio até ao fim do período (calendário gregoriano) — é uma estimativa, não uma garantia. Só aparece depois de decorridos pelo menos ${Math.round(PROJECTION_MIN_ELAPSED_FRACTION*100)}% do período, e nunca multiplica o valor atual por mais de ${PROJECTION_MAX_MULTIPLIER}×. Vendas comerciais também projetadas: ${projCom!==null?fmtEUR(projCom):'—'}.</p>`;
+  html += `<p class="empty-note" style="margin:-8px 0 18px;">A projeção assume que a loja continua a vender ao mesmo ritmo diário médio até ao fim do período (calendário comercial trimestral, 4-4-5) — é uma estimativa, não uma garantia. O multiplicador nunca passa de ${PROJECTION_MAX_MULTIPLIER}×, mesmo nos primeiros dias do período, mas a projeção aparece sempre. Vendas comerciais também projetadas: ${projCom!==null?fmtEUR(projCom):'—'}.</p>`;
 
   html += `<div class="section">
     <h2>Indicadores óticos (contabilístico) — ${PLABELS[currentPeriod]}</h2>
