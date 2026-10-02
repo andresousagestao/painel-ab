@@ -1298,11 +1298,13 @@ function renderCommissionsView(){
   emps.forEach(e=>{
     const homeGid = e.store.global_id;
     const bs = (e.periods.MTD || {}).by_store || {};
-    const entries = Object.entries(bs).filter(([gid,s])=> s.com && s.com.net_sales>0);
+    const entries = Object.entries(bs).filter(([gid,s])=> (s.com && s.com.net_sales>0) || (s.acc && s.acc.net_sales>0));
     if(entries.length===0){
-      // sem vendas comerciais em lado nenhum este mês — mostra à mesma na loja principal, a 0€
+      // sem vendas (comerciais nem contabilísticas) em lado nenhum este mês —
+      // mostra à mesma na loja principal, usando o valor contabilístico real
+      const totalAcc = ((e.periods.MTD||{}).acc||{}).net_sales || 0;
       byStore[homeGid] = byStore[homeGid] || {name: e.store.store_name, items:[]};
-      byStore[homeGid].items.push({emp:e, gid:homeGid, salesAcc:0, isHome:true});
+      byStore[homeGid].items.push({emp:e, gid:homeGid, salesAcc:totalAcc, isHome:true});
     }else{
       entries.forEach(([gid,s])=>{
         byStore[gid] = byStore[gid] || {name: s.store_name, items:[]};
